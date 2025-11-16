@@ -1,0 +1,88 @@
+### POST /simular
+POST http://localhost:8000/simular
+Content-Type: application/json
+
+{
+    "genero": "Femenino",
+    "idade": 30,
+    "antiguidade": 5,
+    "renda": 60000,
+    "segmento": "top",
+    "provincia": "MADRID",
+    "canal": "KAT",
+    "produtos": ["credito_personal", "tarjeta_credito"]
+}
+
+### GET /simular
+GET http://localhost:8000/simular/3
+Content-Type: application/json
+
+### POST /predict_products
+POST http://localhost:8000/predict_products
+Content-Type: application/json
+
+{
+  "fecha_dato":"2025-11-16",
+  "ncodpers":999001,
+  "ind_empleado":"N",
+  "pais_residencia":"ES",
+  "sexo":"H",
+  "age":44,
+  "fecha_alta":"2012-03-15",
+  "ind_nuevo":0,
+  "antiguedad":140,
+  "indrel":1,
+  "ult_fec_cli_1t":null,
+  "indrel_1mes":1,
+  "tiprel_1mes":"A",
+  "indresi":"S",
+  "indext":"N",
+  "conyuemp":"N",
+  "canal_entrada":"KHL",
+  "indfall":"N",
+  "tipodom":1,
+  "cod_prov":28,
+  "nomprov":"MADRID",
+  "ind_actividad_cliente":1,
+  "renta":180000,
+  "segmento":"particulares",
+  "ind_ahor_fin_ult1":0,
+  "ind_aval_fin_ult1":0,
+  "ind_cco_fin_ult1":1,
+  "ind_cder_fin_ult1":0,
+  "ind_cno_fin_ult1":0,
+  "ind_ctju_fin_ult1":0,
+  "ind_ctma_fin_ult1":0,
+  "ind_ctop_fin_ult1":0,
+  "ind_ctpp_fin_ult1":0,
+  "ind_deco_fin_ult1":0,
+  "ind_deme_fin_ult1":0,
+  "ind_dela_fin_ult1":0,
+  "ind_ecue_fin_ult1":0,
+  "ind_fond_fin_ult1":0,
+  "ind_hip_fin_ult1":0,
+  "ind_plan_fin_ult1":0,
+  "ind_pres_fin_ult1":0,
+  "ind_reca_fin_ult1":1,
+  "ind_tjcr_fin_ult1":1,
+  "ind_valo_fin_ult1":0,
+  "ind_viv_fin_ult1":0,
+  "ind_nomina_ult1":1,
+  "ind_nom_pens_ult1":0,
+  "ind_recibo_ult1":1
+}
+
+### POST /recomendar
+POST http://localhost:8000/recomendar
+Content-Type: application/json
+
+{
+    "genero":"M",
+    "idade":80,
+    "antiguidade":0,
+    "renda":90000,
+    "segmento":"top",
+    "provincia":"MADRID",
+    "canal":"KHL",
+    "produtos":["deposito_salario"]
+  }
