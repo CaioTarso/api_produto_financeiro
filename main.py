@@ -6,7 +6,6 @@ import json
 
 app = FastAPI()
 
-# Criar tabelas automaticamente
 @app.on_event("startup")
 def create_db():
     SQLModel.metadata.create_all(engine)
