@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="pt" class="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sistema de Recomendação de Produtos</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              primary: "#EC0000",
+              "background-light": "#f6f7f8",
+              "background-dark": "#101922",
+            },
+            fontFamily: { display: ["Space Grotesk", "sans-serif"] },
+            borderRadius: { DEFAULT: "0.25rem", lg: "0.5rem", xl: "0.75rem", full: "9999px" },
+          },
+        },
+      };
+    </script>
+  </head>
+  <body class="bg-background-light dark:bg-background-dark font-display text-[#111418] dark:text-gray-200">
+    <div class="relative flex min-h-screen w-full flex-col group/design-root">
+      <header class="flex items-center justify-between whitespace-nowrap border-b border-[#dbe0e6] dark:border-gray-700 px-6 md:px-10 py-3 bg-white dark:bg-background-dark sticky top-0 z-10">
+        <div class="flex items-center gap-4 text-[#111418] dark:text-white">
+          <div class="size-8 text-primary">
+            <svg fill="currentColor" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <title>Santander</title>
+              <path d="M21.282 5.082H2.668a.19.19 0 00-.19.19v1.69a.19.19 0 00.19.19h.38v.57h-.57a.19.19 0 00-.19.19v1.69a.19.19 0 00.19.19h.38v.569h-.57a.19.19 0 00-.19.19v1.69a.19.19 0 00.19.19h18.8a.19.19 0 00.19-.19v-1.69a.19.19 0 00-.19-.19h-.569v-.57h.38a.19.19 0 00.19-.19V7.152a.19.19 0 00-.19-.19h-.57v-.57h.38a.19.19 0 00.19-.19v-1.12a.19.19 0 00-.19-.19zM1.334 0C.597 0 0 .597 0 1.334v21.332C0 23.403.597 24 1.334 24h21.332c.737 0 1.334-.597 1.334-1.334V1.334C24 .597 23.403 0 22.666 0z" />
+            </svg>
+          </div>
+          <h2 class="text-lg font-bold tracking-[-0.015em]">Sistema de Recomendação de Produtos</h2>
+        </div>
+      </header>
+      <main class="flex-1 w-full p-4 sm:p-6 lg:p-8">
+        <div class="grid grid-cols-1 xl:grid-cols-3 gap-6 w-full">
+          <!-- Coluna Formulário -->
+          <div class="xl:col-span-1 flex flex-col gap-6">
+            <div class="flex flex-col gap-6 bg-white dark:bg-gray-800 border border-[#dbe0e6] dark:border-gray-700 rounded-xl p-6">
+              <div class="flex flex-col">
+                <h2 class="text-2xl font-bold tracking-tight text-[#111418] dark:text-white">Entrada de Dados</h2>
+                <p class="text-base text-[#617589] dark:text-gray-400">Simule um cliente único para obter recomendações.</p>
+              </div>
+              <form id="recomendar-form" class="space-y-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <label class="flex flex-col w-full">
+                    <p class="text-sm font-medium pb-2">Gênero</p>
+                    <select id="genero" class="form-select w-full h-11 px-3 rounded-lg border border-[#dbe0e6] dark:border-gray-600 bg-white dark:bg-gray-800">
+                      <option value="M">Masculino</option>
+                      <option value="F">Feminino</option>
+                    </select>
+                  </label>
+                  <label class="flex flex-col w-full">
+                    <p class="text-sm font-medium pb-2">Antiguidade (meses)</p>
+                    <input id="antiguidade" type="number" placeholder="Ex: 36" class="form-input w-full h-11 p-3 rounded-lg border border-[#dbe0e6] dark:border-gray-600 bg-white dark:bg-gray-800" />
+                  </label>
+                  <label class="flex flex-col w-full">
+                    <p class="text-sm font-medium pb-2">Idade</p>
+                    <input id="idade" type="number" placeholder="Ex: 42" class="form-input w-full h-11 p-3 rounded-lg border border-[#dbe0e6] dark:border-gray-600 bg-white dark:bg-gray-800" />
+                  </label>
+                  <label class="flex flex-col w-full">
+                    <p class="text-sm font-medium pb-2">Renda Estimada</p>
+                    <input id="renda" type="number" placeholder="Ex: 55000" class="form-input w-full h-11 p-3 rounded-lg border border-[#dbe0e6] dark:border-gray-600 bg-white dark:bg-gray-800" />
+                  </label>
+                  <label class="flex flex-col w-full">
+                    <p class="text-sm font-medium pb-2">Segmento</p>
+                    <select id="segmento" class="form-select w-full h-11 px-3 rounded-lg border border-[#dbe0e6] dark:border-gray-600 bg-white dark:bg-gray-800">
+                      <option value="top">Van Gogh</option>
+                      <option value="particulares">Select</option>
+                      <option value="universitario">Universitário</option>
+                    </select>
+                  </label>
+                  <label class="flex flex-col w-full">
+                    <p class="text-sm font-medium pb-2">Província</p>
+                    <select id="provincia" class="form-select w-full h-11 px-3 rounded-lg border border-[#dbe0e6] dark:border-gray-600 bg-white dark:bg-gray-800">
+                      <option value="MADRID">MADRID</option>
+                      <option value="BARCELONA">BARCELONA</option>
+                      <option value="VALENCIA">VALENCIA</option>
+                    </select>
+                  </label>
+                  <label class="flex flex-col w-full sm:col-span-2">
+                    <p class="text-sm font-medium pb-2 pt-2">Canal de Aquisição</p>
+                    <select id="canal" class="form-select w-full h-11 px-3 rounded-lg border border-[#dbe0e6] dark:border-gray-600 bg-white dark:bg-gray-800">
+                      <option value="KHE">KHE</option>
+                      <option value="KAT">KAT</option>
+                      <option value="KFC">KFC</option>
+                      <option value="KHL">KHL</option>
+                    </select>
+                  </label>
+                </div>
+                <div>
+                  <h3 class="text-base font-bold pb-2 pt-2">Posse de Produtos (Lag Features)</h3>
+                  <div id="produtos" class="grid grid-cols-2 gap-3 p-4 border border-[#dbe0e6] dark:border-gray-700 rounded-lg bg-background-light dark:bg-gray-900/50">
+                    <label class="flex items-center gap-2 cursor-pointer"><input data-product="conta_corrente" type="checkbox" class="form-checkbox h-4 w-4" /><span class="text-sm">Conta Corrente</span></label>
+                    <label class="flex items-center gap-2 cursor-pointer"><input data-product="cartao_credito" type="checkbox" class="form-checkbox h-4 w-4" /><span class="text-sm">Cartão Crédito</span></label>
+                    <label class="flex items-center gap-2 cursor-pointer"><input data-product="plano_pensao" type="checkbox" class="form-checkbox h-4 w-4" /><span class="text-sm">Plano Pensão</span></label>
+                    <label class="flex items-center gap-2 cursor-pointer"><input data-product="recebimento_recibos" type="checkbox" class="form-checkbox h-4 w-4" /><span class="text-sm">Débito Direto</span></label>
+                    <label class="flex items-center gap-2 cursor-pointer"><input data-product="conta_nominal" type="checkbox" class="form-checkbox h-4 w-4" /><span class="text-sm">Conta Nominal</span></label>
+                    <label class="flex items-center gap-2 cursor-pointer"><input data-product="conta_maior_idade" type="checkbox" class="form-checkbox h-4 w-4" /><span class="text-sm">Conta Maior Idade</span></label>
+                    <label class="flex items-center gap-2 cursor-pointer"><input data-product="conta_terceiros" type="checkbox" class="form-checkbox h-4 w-4" /><span class="text-sm">Conta Terceiros</span></label>
+                    <label class="flex items-center gap-2 cursor-pointer"><input data-product="conta_particular" type="checkbox" class="form-checkbox h-4 w-4" /><span class="text-sm">Conta Particular</span></label>
+                    <label class="flex items-center gap-2 cursor-pointer"><input data-product="deposito_prazo_longo" type="checkbox" class="form-checkbox h-4 w-4" /><span class="text-sm">Depósito Longo Prazo</span></label>
+                    <label class="flex items-center gap-2 cursor-pointer"><input data-product="conta_eletronica" type="checkbox" class="form-checkbox h-4 w-4" /><span class="text-sm">Conta Eletrônica</span></label>
+                    <label class="flex items-center gap-2 cursor-pointer"><input data-product="fundo_investimento" type="checkbox" class="form-checkbox h-4 w-4" /><span class="text-sm">Fundo Investimento</span></label>
+                    <label class="flex items-center gap-2 cursor-pointer"><input data-product="valores_mobiliarios" type="checkbox" class="form-checkbox h-4 w-4" /><span class="text-sm">Valores Mobiliários</span></label>
+                    <label class="flex items-center gap-2 cursor-pointer"><input data-product="deposito_salario" type="checkbox" class="form-checkbox h-4 w-4" /><span class="text-sm">Depósito Salário</span></label>
+                    <label class="flex items-center gap-2 cursor-pointer"><input data-product="deposito_pensao" type="checkbox" class="form-checkbox h-4 w-4" /><span class="text-sm">Depósito Pensão</span></label>
+                  </div>
+                </div>
+                <div class="flex items-center justify-end gap-3 pt-4">
+                  <button id="reset-btn" type="reset" class="px-4 py-2 rounded-lg text-sm font-semibold bg-gray-200 dark:bg-gray-700 text-[#111418] dark:text-white hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">Limpar</button>
+                  <button id="submit-btn" type="submit" class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-primary text-white hover:bg-primary/90 transition-colors"><span class="material-symbols-outlined text-base">insights</span> Simular</button>
+                </div>
+                <p id="feedback" class="text-sm pt-2 text-gray-600 dark:text-gray-400"></p>
+              </form>
+            </div>
+          </div>
+          <!-- Coluna Resultados -->
+          <div class="xl:col-span-2 flex flex-col gap-6">
+            <div class="flex flex-col bg-white dark:bg-gray-800 border border-[#dbe0e6] dark:border-gray-700 rounded-xl p-6 h-full">
+              <h2 class="text-2xl font-bold tracking-tight text-[#111418] dark:text-white">Visualização de Resultados</h2>
+              <div class="flex flex-col gap-8 mt-4 flex-1">
+                <div>
+                  <h3 class="text-lg font-bold text-[#111418] dark:text-white mb-2">Tabela de Ranking Principal</h3>
+                  <div class="w-full overflow-x-auto">
+                    <table class="w-full text-left">
+                      <thead class="border-b border-gray-200 dark:border-gray-600">
+                        <tr class="bg-gray-50 dark:bg-gray-700/50">
+                          <th class="p-3 text-sm font-semibold text-gray-600 dark:text-gray-300">Ranking</th>
+                          <th class="p-3 text-sm font-semibold text-gray-600 dark:text-gray-300">Produto Recomendado</th>
+                          <th class="p-3 text-sm font-semibold text-gray-600 dark:text-gray-300 text-right">Probabilidade</th>
+                        </tr>
+                      </thead>
+                      <tbody id="ranking-body"></tbody>
+                    </table>
+                  </div>
+                </div>
+                <!-- Espaço para futuras visualizações -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div class="flex flex-col gap-8"></div>
+                  <div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+      <footer class="w-full text-center p-4 mt-8 border-t border-[#dbe0e6] dark:border-gray-700">
+        <p class="text-sm text-gray-500 dark:text-gray-400">© 2024 Sistema de Recomendação de Produtos. Todos os direitos reservados.</p>
+      </footer>
+    </div>
+    <script src="script.js"></script>
+  </body>
+</html>

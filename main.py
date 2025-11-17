@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel, Session, select
 from database import engine, get_session
 from models import Simulacao # Seu modelo de banco de dados
@@ -15,6 +16,15 @@ from datetime import date as dt_date, date
 import os
 
 app = FastAPI()
+
+# Middleware CORS para aceitar requisições de qualquer origem
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Em produção, substitua por lista restrita
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 def create_db():
@@ -229,15 +239,21 @@ def preprocess_dataframe_for_api(df_raw: pd.DataFrame) -> pd.DataFrame:
         if col in df_processed.columns:
             df_processed[col] = df_processed[col].fillna("Desconhecido")
 
-    # 7. Filtrar por idade (manter consistência com treino, se removia)
+    # 7. Garantir idade válida e dentro da faixa; evitar remoção do único registro
     if 'idade' in df_processed.columns:
-        df_processed = df_processed[(df_processed["idade"] >= 18) & (df_processed["idade"] <= 95)].copy()
+        df_processed['idade'] = pd.to_numeric(df_processed['idade'], errors='coerce').fillna(35)
+        df_processed['idade'] = df_processed['idade'].clip(lower=18, upper=95)
 
-    # 8. Dropar NaNs em colunas específicas
-    cols_to_dropna_subset = ["codigo_provincia", "relacionamento_mes", "renda_estimativa"]
-    existing_cols_to_dropna = [col for col in cols_to_dropna_subset if col in df_processed.columns]
-    if existing_cols_to_dropna:
-        df_processed = df_processed.dropna(subset=existing_cols_to_dropna).copy()
+    # 8. Evitar remoção por NaN: preencher defaults mínimos para inferência única
+    # codigo_provincia: 28 (MADRID), relacionamento_mes: 1.0, renda_estimativa já tratada acima
+    if 'codigo_provincia' in df_processed.columns:
+        df_processed['codigo_provincia'] = pd.to_numeric(df_processed['codigo_provincia'], errors='coerce').fillna(28.0)
+    else:
+        df_processed['codigo_provincia'] = 28.0
+    if 'relacionamento_mes' in df_processed.columns:
+        df_processed['relacionamento_mes'] = pd.to_numeric(df_processed['relacionamento_mes'], errors='coerce').fillna(1.0)
+    else:
+        df_processed['relacionamento_mes'] = 1.0
 
     # 9. Preencher NaNs em 'deposito_salario' e 'deposito_pensao'
     if 'deposito_salario' in df_processed.columns:
@@ -261,20 +277,41 @@ def preprocess_dataframe_for_api(df_raw: pd.DataFrame) -> pd.DataFrame:
         current_product_cols_to_drop = [col for col in colunas_numericas_produtos_full_api if col not in produtos_all_api]
         df_processed = df_processed.drop(columns=current_product_cols_to_drop, errors="ignore")
 
-    # 13. Criar categorias de idade, antiguidade e renda
+    # 13. Criar categorias de idade, antiguidade e renda (com fallback para valores fora dos bins)
     if 'idade' in df_processed.columns and loaded_encoder_idade:
-        df_processed['idade_categoria'] = pd.cut(df_processed['idade'], bins=bins_age_train_api, labels=labels_age_train_api, right=False)
-        # .astype(str) para garantir que CategoricalDtype é convertido para string antes de ser passado para o encoder
-        df_processed['idade_categoria_encoded'] = loaded_encoder_idade.transform(df_processed[['idade_categoria']].astype(str)).ravel()
-        df_processed['idade_categoria_encoded'] = df_processed['idade_categoria_encoded'].fillna(-1) # Preenche NaNs com -1 (unseen categories)
+        df_processed['idade_categoria'] = pd.cut(
+            df_processed['idade'], bins=bins_age_train_api, labels=labels_age_train_api, right=False
+        )
+        # Converter para string e substituir 'nan' por primeira faixa conhecida para evitar erro de categoria desconhecida
+        df_processed['idade_categoria_str'] = df_processed['idade_categoria'].astype(str).replace('nan', labels_age_train_api[0])
+        try:
+            df_processed['idade_categoria_encoded'] = loaded_encoder_idade.transform(
+                df_processed[['idade_categoria_str']]
+            ).ravel()
+        except Exception:
+            # Se ainda falhar, aplica -1 como código desconhecido
+            df_processed['idade_categoria_encoded'] = -1
+        # Garantir tipo numérico
+        if 'idade_categoria_encoded' in df_processed.columns:
+            df_processed['idade_categoria_encoded'] = pd.to_numeric(df_processed['idade_categoria_encoded'], errors='coerce').fillna(-1)
 
     if 'antiguidade_meses' in df_processed.columns:
         df_processed['antiguedade_tempo'] = pd.cut(df_processed['antiguidade_meses'], bins=bins_antiguedad_train_api, labels=labels_antiguedad_train_api, right=False)
 
     if 'renda_estimativa' in df_processed.columns and loaded_encoder_renda:
-        df_processed['renda_categoria'] = pd.cut(df_processed['renda_estimativa'], bins=bins_renda_train_api, labels=labels_renda_train_api, include_lowest=True, right=False, duplicates='drop')
-        df_processed['renda_categoria_encoded'] = loaded_encoder_renda.transform(df_processed[['renda_categoria']].astype(str)).ravel()
-        df_processed['renda_categoria_encoded'] = df_processed['renda_categoria_encoded'].fillna(-1)
+        df_processed['renda_categoria'] = pd.cut(
+            df_processed['renda_estimativa'], bins=bins_renda_train_api, labels=labels_renda_train_api,
+            include_lowest=True, right=False, duplicates='drop'
+        )
+        df_processed['renda_categoria_str'] = df_processed['renda_categoria'].astype(str).replace('nan', labels_renda_train_api[0])
+        try:
+            df_processed['renda_categoria_encoded'] = loaded_encoder_renda.transform(
+                df_processed[['renda_categoria_str']]
+            ).ravel()
+        except Exception:
+            df_processed['renda_categoria_encoded'] = -1
+        if 'renda_categoria_encoded' in df_processed.columns:
+            df_processed['renda_categoria_encoded'] = pd.to_numeric(df_processed['renda_categoria_encoded'], errors='coerce').fillna(-1)
 
         df_processed['renda_log'] = np.log1p(df_processed['renda_estimativa'])
         # 'renda_variacao' para um único ponto no tempo será 0 ou NaN. Precisa de histórico.
