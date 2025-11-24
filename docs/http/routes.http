@@ -26,8 +26,8 @@ Content-Type: application/json
   "ncodpers":999001,
   "ind_empleado":"N",
   "pais_residencia":"ES",
-  "sexo":"H",
-  "age":44,
+  "sexo":"F",
+  "age":33,
   "fecha_alta":"2012-03-15",
   "ind_nuevo":0,
   "antiguedad":140,
@@ -45,10 +45,10 @@ Content-Type: application/json
   "nomprov":"MADRID",
   "ind_actividad_cliente":1,
   "renta":180000,
-  "segmento":"particulares",
+  "segmento":"top",
   "ind_ahor_fin_ult1":0,
-  "ind_aval_fin_ult1":0,
-  "ind_cco_fin_ult1":1,
+  "ind_aval_fin_ult1":1,
+  "ind_cco_fin_ult1":0,
   "ind_cder_fin_ult1":0,
   "ind_cno_fin_ult1":0,
   "ind_ctju_fin_ult1":0,
@@ -72,17 +72,32 @@ Content-Type: application/json
   "ind_recibo_ult1":1
 }
 
-### POST /recomendar
-POST http://localhost:8000/recomendar
+### POST /recomendar (Cenário A)
+POST http://localhost:8000/recomendar?debug=true
 Content-Type: application/json
 
 {
-    "genero":"M",
-    "idade":80,
-    "antiguidade":0,
-    "renda":90000,
-    "segmento":"top",
-    "provincia":"MADRID",
-    "canal":"KHL",
-    "produtos":["deposito_salario"]
-  }
+  "genero": "M",
+  "idade": 22,
+  "antiguidade": 6,
+  "renda": 60000,
+  "segmento": "universitario",
+  "provincia": "MADRID",
+  "canal": "KHL",
+  "produtos": []
+}
+
+### POST /recomendar (Cenário B)
+POST http://localhost:8000/recomendar?debug=true
+Content-Type: application/json
+
+{
+  "genero": "F",
+  "idade": 60,
+  "antiguidade": 120,
+  "renda": 250000,
+  "segmento": "top",
+  "provincia": "BARCELONA",
+  "canal": "KAT",
+  "produtos": ["conta_corrente", "recebimento_recibos"]
+}

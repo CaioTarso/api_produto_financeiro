@@ -100,7 +100,8 @@
       const tr = document.createElement('tr');
       tr.className = 'border-b border-gray-200 dark:border-gray-700';
       const nome = friendlyNames[item.produto] || item.produto;
-      const prob = (typeof item.prob === 'number') ? item.prob : parseFloat(item.prob);
+      const probRaw = (typeof item.prob === 'number') ? item.prob : parseFloat(item.prob);
+      const prob = Number.isFinite(probRaw) ? (probRaw * 100) : null; // multiplicar por 1000 para exibição
       tr.innerHTML = `
         <td class="p-3 text-sm font-medium text-[#111418] dark:text-gray-200">${idx+1}</td>
         <td class="p-3 text-sm text-[#111418] dark:text-gray-200">${nome}</td>
