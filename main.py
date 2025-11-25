@@ -47,6 +47,25 @@ encoder_renda.fit(pd.DataFrame({'renda_categoria': renda_order}))
 print("Encoders configurados.")
 
 
+# --- 1.5. Carregar Target Encoding Mappings (se disponível) ---
+TE_MAPPINGS = None
+te_mappings_path = os.path.join('./models', 'te_mappings.pkl')
+if os.path.exists(te_mappings_path):
+    try:
+        TE_MAPPINGS = joblib.load(te_mappings_path)
+        print(f"✓ Target Encoding mappings carregados de {te_mappings_path}")
+        # Estatísticas
+        total_mappings = sum(len(data['mapping']) for col_dict in TE_MAPPINGS.values() for data in col_dict.values())
+        print(f"  Total de {total_mappings} mappings carregados")
+    except Exception as e:
+        print(f"⚠ Erro ao carregar TE mappings: {e}")
+        TE_MAPPINGS = None
+else:
+    print(f"⚠ TE mappings não encontrados em {te_mappings_path}")
+    print(f"  Usando valores default (0.5) - probabilidades serão imprecisas!")
+    print(f"  Execute 'export_te_mappings.py' no notebook e copie o arquivo gerado.")
+
+
 # --- 2. Carregar Modelos do Novo Diretório /models ---
 MODELS_DIR = './models'
 
@@ -133,113 +152,164 @@ translate_columns_api = {
 }
 
 
-# --- 3. Função de Pré-processamento (BASEADA NO NOTEBOOK) ---
+# --- 3. Função de Pré-processamento (EXATAMENTE COMO NO NOTEBOOK) ---
 def preprocess_dataframe_for_api(df_raw: pd.DataFrame) -> pd.DataFrame:
     """
-    Pré-processamento usando a mesma lógica do notebook de treinamento.
-    Gera as 62 features esperadas pelos modelos XGBoost.
+    Pré-processamento EXATAMENTE como no notebook de treinamento.
+    Gera as features esperadas pelos modelos XGBoost.
     """
     print(f"[DEBUG] preprocess - Input shape: {df_raw.shape}, columns: {list(df_raw.columns)[:10]}...")
     
     df = df_raw.copy()
 
-    # 1. Converter tipos básicos
-    df['idade'] = pd.to_numeric(df['idade'], errors='coerce').fillna(35)
-    df['renda_estimativa'] = pd.to_numeric(df['renda_estimativa'], errors='coerce').fillna(120000.0)
-    df['antiguidade_meses'] = pd.to_numeric(df['antiguidade_meses'], errors='coerce').fillna(12.0)
+    # 1. Converter tipos básicos (como no notebook)
+    df['idade'] = pd.to_numeric(df['idade'], errors='coerce')
+    df['renda_estimativa'] = pd.to_numeric(df['renda_estimativa'], errors='coerce')
+    df['antiguidade_meses'] = pd.to_numeric(df['antiguidade_meses'], errors='coerce')
+    df['relacionamento_mes'] = pd.to_numeric(df.get('relacionamento_mes', 1), errors='coerce')
     
-    # 2. Preencher categoricas
+    # Substituir faltantes pela mediana/defaults
+    df['idade'] = df['idade'].fillna(35)
+    df['renda_estimativa'] = df['renda_estimativa'].fillna(120000.0)
+    df['antiguidade_meses'] = df['antiguidade_meses'].fillna(12.0)
+    df['relacionamento_mes'] = df['relacionamento_mes'].fillna(1.0)
+    
+    # 2. Substituir sexo (como no notebook: H=homem, V=mulher)
+    df['sexo'] = df['sexo'].replace({'H': 'homem', 'V': 'mulher'})
+    
+    # 3. Preencher categóricas
     categorical_cols = ["sexo", "pais_residencia", "segmento_marketing", "canal_aquisicao",
                        "tipo_relacionamento", "tipo_relacionamento_mes", "codigo_provincia", "nome_provincia"]
     for col in categorical_cols:
         if col in df.columns:
-            df[col] = df[col].fillna("Desconhecido" if df[col].dtype == 'object' else 0)
+            df[col] = df[col].fillna("Desconhecido")
 
-    # 3. Features de engenharia: renda_log e renda_variacao
-    df['renda_log'] = np.log1p(df['renda_estimativa'])
-    df['renda_variacao'] = 0.0  # Para novos clientes, assume 0
+    # 4. Criar coluna indicadora de renda faltante (NOTEBOOK)
+    df['renda_estimativa_faltante'] = df['renda_estimativa'].isna().astype(int)
     
-    # 4. Features _prev (produtos do mês anterior)
-    product_cols_base = ['conta_corrente', 'conta_eletronica', 'conta_nominal', 'conta_terceiros', 'recebimento_recibos']
-    for prod_base in product_cols_base:
-        # Se não vier no input, assume 0
-        df[f'{prod_base}_prev'] = df.get(f'{prod_base}_prev', 0)
+    # 5. Features de Antiguidade (como no notebook)
+    # Faixas de antiguidade
+    max_antiguidade = df['antiguidade_meses'].max()
+    bins_antiguedad = [0, 6, 12, 36, 60, max(max_antiguidade + 1, 120)]
+    labels_antiguedad = ['0-6m', '6-12m', '1-3y', '3-5y', '>5y']
+    df['antiguedade_tempo'] = pd.cut(df['antiguidade_meses'], bins=bins_antiguedad, labels=labels_antiguedad, right=False)
     
-    # 5. Faixas de Idade
+    # 6. Features de Idade (como no notebook)
+    # Faixas de idade
     bins_age = [0, 25, 35, 45, 60, 100]
     labels_age = ['Jovem', 'Jovem_Adulto', 'Adulto', 'Meia_Idade', 'Idoso']
     df['idade_categoria'] = pd.cut(df['idade'], bins=bins_age, labels=labels_age, right=False)
     df['idade_categoria'] = df['idade_categoria'].fillna('Adulto')  # Fallback
     
-    # 6. Faixas de Renda (simplificado - idealmente usar os mesmos quantis do treino)
-    # Usando quantis fixos como aproximação
-    if df['renda_estimativa'].nunique() > 1:
-        bins_renda = [0, 75000, 120000, df['renda_estimativa'].max() + 1]
-    else:
-        bins_renda = [0, 75000, 120000, 300000]
-    labels_renda = ['Baixa', 'Media_Baixa', 'Media_Alta']
+    # Faixas de idade para análise (18-25, 26-40, 41-60, >60)
+    max_idade = df['idade'].max()
+    bins_idade_faixas = [18, 26, 41, 61, max(max_idade + 1, 100)]
+    labels_idade_faixas = ['18-25', '26-40', '41-60', '>60']
+    df['idade_faixas'] = pd.cut(df['idade'], bins=bins_idade_faixas, labels=labels_idade_faixas, right=False)
     
-    # Garantir pelo menos 3 bins
-    if len(bins_renda) < 4:
-        bins_renda = [0, 75000, 120000, 300000]
+    # 7. Features de Renda (como no notebook)
+    # renda_log
+    df['renda_log'] = np.log1p(df['renda_estimativa'])
     
-    df['renda_categoria'] = pd.cut(df['renda_estimativa'], bins=bins_renda, labels=labels_renda[:len(bins_renda)-1], include_lowest=True)
-    df['renda_categoria'] = df['renda_categoria'].fillna('Media_Baixa')  # Fallback
+    # renda_variacao (para API, sempre 0)
+    df['renda_variacao'] = 0.0
     
-    # Adicionar 'Alta' se necessário para match com encoder
-    if 'Alta' not in df['renda_categoria'].cat.categories:
-        df['renda_categoria'] = df['renda_categoria'].cat.add_categories(['Alta'])
+    # Faixas de renda (quantis do notebook: 0, 0.25, 0.5, 0.75, 1.0)
+    # Usando quantis fixos típicos de España
+    max_renda = df['renda_estimativa'].max()
+    bins_renta = [0, 60000, 100000, 150000, max(max_renda + 1, 200000)]
+    labels_renta = ['Baixa', 'Media_Baixa', 'Media_Alta', 'Alta']
+    df['renda_categoria'] = pd.cut(df['renda_estimativa'], bins=bins_renta, labels=labels_renta, include_lowest=True, right=False)
+    df['renda_categoria'] = df['renda_categoria'].fillna('Media_Baixa')
     
-    # 7. Outras features criadas
-    df['possui_pacote_basico'] = ((df.get('conta_corrente', 0) == 1) & (df.get('recebimento_recibos', 0) == 1)).astype(int)
+    # Faixas de renda (quantis: 0, 0.33, 0.66, 1.0)
+    bins_renda_faixas = [0, 80000, 130000, max(max_renda + 1, 200000)]
+    labels_renda_faixas = ['baixa', 'média', 'alta']
+    df['renda_faixas'] = pd.cut(df['renda_estimativa'], bins=bins_renda_faixas, labels=labels_renda_faixas, include_lowest=True)
     
-    # 8. Features de Interação produto-idade
+    # 8. Features de Produtos
+    product_cols_base = ['conta_corrente', 'conta_eletronica', 'conta_nominal', 'conta_terceiros', 'recebimento_recibos']
+    
+    # Garantir que produtos existem (default 0)
+    for prod in product_cols_base:
+        if prod not in df.columns:
+            df[prod] = 0
+    
+    # Features _prev (produtos do mês anterior)
     for prod_base in product_cols_base:
-        df[f'{prod_base}_idade_interacao'] = df.get(prod_base, 0) * df['idade']
+        if f'{prod_base}_prev' not in df.columns:
+            df[f'{prod_base}_prev'] = df.get(prod_base, 0)
     
-    # 9. Features _mes_anterior (cópia dos produtos atuais se não fornecido)
+    # possui_pacote_basico
+    df['possui_pacote_basico'] = ((df['conta_corrente'] == 1) & (df['recebimento_recibos'] == 1)).astype(int)
+    
+    # Criar segmento_idade (para TE)
+    df['segmento_idade'] = df['segmento_marketing'].astype(str) + '_' + df['idade_faixas'].astype(str)
+    
+    # 9. Features de Interação produto-idade
+    for prod_base in product_cols_base:
+        df[f'{prod_base}_idade_interacao'] = df[prod_base] * df['idade']
+    
+    # 10. Features _mes_anterior (posse de produtos no mês anterior)
     for prod_base in product_cols_base:
         if f'{prod_base}_mes_anterior' not in df.columns:
             df[f'{prod_base}_mes_anterior'] = df.get(prod_base, 0)
     
-    # 10. Aplicar Encoders
+    # 11. Aplicar Ordinal Encoders (como no notebook)
     try:
         df['idade_categoria_encoded'] = encoder_idade.transform(df[['idade_categoria']]).flatten()
     except Exception as e:
-        print(f"Erro ao encodar idade_categoria: {e}")
-        df['idade_categoria_encoded'] = 2  # Default 'Adulto'
+        print(f"⚠ Erro ao encodar idade_categoria: {e}")
+        df['idade_categoria_encoded'] = 2.0  # Default 'Adulto'
     
     try:
         df['renda_categoria_encoded'] = encoder_renda.transform(df[['renda_categoria']]).flatten()
     except Exception as e:
-        print(f"Erro ao encodar renda_categoria: {e}")
-        df['renda_categoria_encoded'] = 1  # Default 'Media_Baixa'
+        print(f"⚠ Erro ao encodar renda_categoria: {e}")
+        df['renda_categoria_encoded'] = 1.0  # Default 'Media_Baixa'
     
-    # 11. Target Encoding (usando valores default - IDEALMENTE carregar mappings salvos)
-    # Sem os mappings reais, usamos 0.5 como média global para todas as TE features
+    # 12. Target Encoding (usando mappings reais)
     te_cols = [
         "canal_aquisicao", "codigo_provincia", "nome_provincia",
-        "relacionamento_mes", "tipo_relacionamento_mes", "segmento_marketing"
+        "relacionamento_mes", "tipo_relacionamento_mes", "segmento_marketing", "segmento_idade"
     ]
-    
-    # Criar feature segmento_idade para TE
-    if 'segmento_marketing' in df.columns:
-        df['segmento_idade'] = df['segmento_marketing'].astype(str) + '_' + df['idade_categoria'].astype(str)
-    else:
-        df['segmento_idade'] = 'Desconhecido_Adulto'
-    
-    te_cols.append('segmento_idade')
     
     products_te = ['conta_corrente', 'conta_eletronica', 'conta_nominal', 'conta_terceiros', 'recebimento_recibos']
     
-    # Preencher todas as features TE com valor default 0.5 (média global)
-    # TODO: Substituir por mappings reais salvos durante o treinamento
+    # Preencher missing_category
     for col in te_cols:
-        for prod_te in products_te:
-            feature_name = f"TE_{col}_{prod_te}"
-            df[feature_name] = 0.5  # Valor default sem os mappings reais
+        if col in df.columns:
+            df[col] = df[col].fillna("missing_category")
     
-    # 12. Selecionar apenas as 62 features esperadas pelo modelo (na ordem correta)
+    # Aplicar Target Encoding
+    if TE_MAPPINGS is not None:
+        for col in te_cols:
+            if col not in TE_MAPPINGS:
+                print(f"⚠ TE mapping para '{col}' não encontrado, usando global_mean")
+                continue
+            
+            for prod_te in products_te:
+                if prod_te not in TE_MAPPINGS[col]:
+                    continue
+                    
+                feature_name = f"TE_{col}_{prod_te}"
+                mapping = TE_MAPPINGS[col][prod_te]['mapping']
+                global_mean = TE_MAPPINGS[col][prod_te]['global_mean']
+                
+                # Aplicar mapping com fallback para global_mean
+                if col in df.columns:
+                    df[feature_name] = df[col].map(mapping).fillna(global_mean)
+                else:
+                    df[feature_name] = global_mean
+    else:
+        print("⚠ TE_MAPPINGS não carregados! Usando valores default (global_mean estimado)")
+        # Fallback: usar valores default aproximados
+        for col in te_cols:
+            for prod_te in products_te:
+                feature_name = f"TE_{col}_{prod_te}"
+                df[feature_name] = 0.02  # Média global típica de conversão
+    
+    # 13. Selecionar apenas as features esperadas pelo modelo (na ordem correta)
     expected_features = [
         'ativo_mes_passado', 'conta_corrente', 'conta_nominal', 'conta_terceiros',
         'conta_eletronica', 'conta_cobranca_recibos', 'recebimento_recibos',
@@ -279,14 +349,15 @@ def preprocess_dataframe_for_api(df_raw: pd.DataFrame) -> pd.DataFrame:
     # Garantir que todas as features existem (fill com 0 se ausente)
     for feature in expected_features:
         if feature not in df.columns:
-            df[feature] = 0
+            df[feature] = 0.0
     
-    # Retornar apenas as 62 features na ordem correta
-    df_final = df[expected_features]
+    # Retornar apenas as features na ordem correta
+    df_final = df[expected_features].copy()
     
-    print(f"[DEBUG] preprocess - Output shape: {df_final.shape}, columns: {list(df_final.columns)[:10]}...")
+    # Garantir tipos numéricos
+    df_final = df_final.astype(float)
     
-    return df_final
+    print(f"[DEBUG] preprocess - Output shape: {df_final.shape}, primeiras features: {list(df_final.columns)[:5]}")
     
     return df_final
 
@@ -476,14 +547,16 @@ def _map_segmento_to_original(seg: Optional[str]) -> str:
 
 
 def _map_genero_to_original(gen: Optional[str]) -> str:
+    """Mapeia genero do payload para formato do notebook (H=homem, V=mulher)"""
     if not gen:
         return "H"
     g = gen.strip().upper()
-    if g in {"H", "M"}:
+    # Input pode vir como H/M ou H/V
+    if g in {"H", "HOMEM", "MASCULINO"}:
         return "H"
-    if g in {"V", "F"}:
+    if g in {"V", "M", "MULHER", "FEMININO", "F"}:
         return "V"
-    return "H"
+    return "H"  # Default
 
 
 def _provincia_codigo(nome_prov: Optional[str]) -> float:
@@ -524,7 +597,7 @@ def build_raw_from_simulacao(payload: SimulacaoInput) -> pd.DataFrame:
         "pais_residencia": "ES",
         "tipo_relacionamento": "1",
         "tipo_relacionamento_mes": "A",
-        "relacionamento_mes": 1.0,
+        "relacionamento_mes": "1",  # Será convertido para numérico no preprocessing
         "ativo_mes_passado": 1.0,
         
         # Produtos atuais (traduzidos)
