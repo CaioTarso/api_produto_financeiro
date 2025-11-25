@@ -534,16 +534,19 @@ async def predict_products(customer_data: CustomerFeatures):
 
 # --- 7. Utilitários para /recomendar ---
 def _map_segmento_to_original(seg: Optional[str]) -> str:
+    """Mapeia segmento do payload para formato do TE (lowercase sem prefixo)"""
     if not seg:
-        return "02 - PARTICULARES"
+        return "particulares"
     s = seg.strip().lower()
-    if s.startswith("top"):
-        return "01 - TOP"
-    if s.startswith("part"):
-        return "02 - PARTICULARES"
-    if s.startswith("univ"):
-        return "03 - UNIVERSITARIO"
-    return "02 - PARTICULARES"
+    # Remover prefixos numéricos se existirem
+    s = s.replace("01 - ", "").replace("02 - ", "").replace("03 - ", "")
+    if s.startswith("top") or "top" in s:
+        return "top"
+    if s.startswith("part") or "particulares" in s:
+        return "particulares"
+    if s.startswith("univ") or "universitario" in s:
+        return "universitario"
+    return "particulares"
 
 
 def _map_genero_to_original(gen: Optional[str]) -> str:
@@ -657,10 +660,10 @@ async def recomendar(simulacao: SimulacaoInput, debug: bool = False):
         if not debug:
             return {"ranking": ranking}
 
-        # Modo debug
+        # Modo debug - retornar TODAS as features
         feature_row = processed_df.iloc[0].to_dict()
         debug_info = {
-            "processed_features_sample": {k: float(v) if isinstance(v, (int, float, np.number)) else str(v) for k, v in list(feature_row.items())[:20]},
+            "processed_features_all": {k: float(v) if isinstance(v, (int, float, np.number)) else str(v) for k, v in feature_row.items()},
             "processed_shape": processed_df.shape
         }
 

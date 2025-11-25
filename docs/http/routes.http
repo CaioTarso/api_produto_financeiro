@@ -84,7 +84,7 @@ Content-Type: application/json
   "segmento": "universitario",
   "provincia": "MADRID",
   "canal": "KHL",
-  "produtos": ["recebimento_recibos"]
+  "produtos": []
 }
 
 ### POST /recomendar (Cenário B - Cliente Top com Produtos)
