@@ -72,8 +72,8 @@ Content-Type: application/json
   "ind_recibo_ult1":1
 }
 
-### POST /recomendar (Cenário A)
-POST http://localhost:8000/recomendar?debug=true
+### POST /recomendar (Cenário A - Jovem Universitário)
+POST http://localhost:8000/recomendar
 Content-Type: application/json
 
 {
@@ -87,17 +87,20 @@ Content-Type: application/json
   "produtos": []
 }
 
-### POST /recomendar (Cenário B)
-POST http://localhost:8000/recomendar?debug=true
+### POST /recomendar (Cenário B - Cliente Top com Produtos)
+POST http://localhost:8000/recomendar
 Content-Type: application/json
 
 {
   "genero": "F",
   "idade": 60,
   "antiguidade": 120,
-  "renda": 250000,
-  "segmento": "top",
+  "renda": 500000,
+  "segmento": "universitario",
   "provincia": "BARCELONA",
   "canal": "KAT",
-  "produtos": ["conta_corrente", "recebimento_recibos"]
+  "produtos": []
 }
+
+### GET /_artifacts (Diagnóstico de Modelos)
+GET http://localhost:8000/_artifacts

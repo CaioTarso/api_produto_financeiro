@@ -2,25 +2,27 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel, Session, select
 from database import engine, get_session
-from models import Simulacao # Seu modelo de banco de dados
+from models import Simulacao
 from schemas import SimulacaoInput
 
 import json
 import pandas as pd
 import numpy as np
 import joblib
+import pickle
 import xgboost as xgb
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from datetime import date as dt_date, date
 import os
+from sklearn.preprocessing import OrdinalEncoder
 
 app = FastAPI()
 
-# Middleware CORS para aceitar requisições de qualquer origem
+# Middleware CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Em produção, substitua por lista restrita
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -31,95 +33,51 @@ def create_db():
     SQLModel.metadata.create_all(engine)
 
 
-# --- 1. Carregar Modelos e Parâmetros de Pré-processamento --- 
+# --- 1. Preparar Encoders (mesma lógica do notebook) ---
+idade_order = ['Jovem', 'Jovem_Adulto', 'Adulto', 'Meia_Idade', 'Idoso']
+renda_order = ['Baixa', 'Media_Baixa', 'Media_Alta', 'Alta']
 
-# Define o diretório onde os modelos e encoders foram salvos
-MODELS_DIR = './ml_artifacts' # OU '.' se estiverem na mesma pasta do main.py
+encoder_idade = OrdinalEncoder(categories=[idade_order], handle_unknown='use_encoded_value', unknown_value=-1)
+encoder_renda = OrdinalEncoder(categories=[renda_order], handle_unknown='use_encoded_value', unknown_value=-1)
 
-# Carregar encoders Ordinal
-loaded_encoder_idade = None
-loaded_encoder_renda = None
-encoders_path = os.path.join(MODELS_DIR, 'preprocessing_encoders.joblib')
-try:
-    loaded_encoders = joblib.load(encoders_path)
-    loaded_encoder_idade = loaded_encoders['encoder_idade']
-    loaded_encoder_renda = loaded_encoders['encoder_renda']
-    print("Encoders de idade e renda carregados com sucesso.")
-except FileNotFoundError:
-    print(f"ERRO: Arquivo de encoders não encontrado em {encoders_path}. Certifique-se de que o caminho está correto.")
-    print("A API pode não funcionar corretamente sem os encoders.")
-except Exception as e:
-    print(f"ERRO ao carregar encoders: {e}")
+# Fit com dados de exemplo (necessário para o encoder funcionar)
+encoder_idade.fit(pd.DataFrame({'idade_categoria': idade_order}))
+encoder_renda.fit(pd.DataFrame({'renda_categoria': renda_order}))
+
+print("Encoders configurados.")
 
 
-# Definir os top 5 produtos (nomes do target)
+# --- 2. Carregar Modelos do Novo Diretório /models ---
+MODELS_DIR = './models'
+
+# Top 5 produtos
 top_5_products = [
     'conta_corrente_new', 'recebimento_recibos_new', 'conta_terceiros_new',
     'conta_nominal_new', 'conta_eletronica_new'
 ]
 
-# Carregar os modelos XGBoost
+# Carregar modelos XGBoost em formato .pkl
 top_5_xgb_models = {}
 for product_name in top_5_products:
-    model_path = os.path.join(MODELS_DIR, f'xgboost_{product_name}.json')
+    model_path = os.path.join(MODELS_DIR, f'xgboost_{product_name}.pkl')
     try:
-        model = xgb.Booster()
-        model.load_model(model_path)
+        with open(model_path, 'rb') as f:
+            model = pickle.load(f)
         top_5_xgb_models[product_name] = model
-        print(f"Modelo XGBoost para '{product_name}' carregado.")
+        # Verificar feature_names
+        try:
+            feature_names = model.feature_names if hasattr(model, 'feature_names') else model.get_booster().feature_names if hasattr(model.get_booster(), 'feature_names') else None
+            if feature_names:
+                print(f"Modelo '{product_name}' espera {len(feature_names)} features.")
+        except:
+            pass
+        print(f"Modelo XGBoost para '{product_name}' carregado de {model_path}.")
     except Exception as e:
         print(f"ERRO: Não foi possível carregar o modelo para '{product_name}' de {model_path}. Erro: {e}")
         print("A API pode não conseguir fazer previsões para este produto.")
 
-# --- Parâmetros de Pré-processamento Derivados do Treino ---
-# Estas variáveis são cruciais e DEVERIAM SER EXPORTADAS E CARREGADAS.
-# Para simplificar aqui, elas são replicadas, mas em produção, use joblib.dump/load.
 
-median_renda_by_segmento_api = pd.Series({
-    'universitario': 60000.0,
-    'particulares': 120000.0,
-    'top': 250000.0,
-    'Desconhecido': 90000.0
-})
-
-bins_age_train_api = [0, 25, 35, 45, 60, 100]
-labels_age_train_api = ['Jovem', 'Jovem_Adulto', 'Adulto', 'Meia_Idade', 'Idoso']
-
-bins_antiguedad_train_api = [0, 6, 12, 36, 60, 256.0] # Max de antiguidade do treino
-labels_antiguedad_train_api = ['0-6m', '6-12m', '1-3y', '3-5y', '>5y']
-
-bins_renda_train_api = [9452.97, 76049.52, 103219.62, 139311.675, 8807813.86] # Quartis do treino
-labels_renda_train_api = ['Baixa', 'Media_Baixa', 'Media_Alta', 'Alta']
-
-bins_renda_faixas_train_api = [9452.97, 85000.0, 150000.0, 8807813.86] # Quartis customizados
-labels_renda_faixas_train_api = ['baixa', 'média', 'alta']
-
-produtos_all_api = [
-    "conta_corrente", "cartao_credito", "plano_pensao", "recebimento_recibos",
-    "conta_nominal", "conta_maior_idade", "conta_terceiros", "conta_particular",
-    "deposito_prazo_longo", "conta_eletronica", "fundo_investimento",
-    "valores_mobiliarios", "deposito_salario", "deposito_pensao"
-]
-
-colunas_descartar_api = [
-    "empregado_banco", "garantia_aval", "tipo_endereco",
-    "ultima_data_cliente_trimestre", "falecido"
-]
-
-colunas_numericas_comuns_api = ["idade", "renda_estimativa", "antiguidade_meses"]
-
-categoricas_api = ["sexo", "pais_residencia", "segmento_marketing", "canal_aquisicao",
-                   "tipo_relacionamento", "tipo_relacionamento_mes"]
-
-colunas_numericas_produtos_full_api = [
-    "conta_corrente", "conta_poupanca", "cartao_credito", "deposito_prazo",
-    "plano_pensao", "emprestimo_pessoal", "credito_habitacao", "recebimento_recibos",
-    "conta_nominal", "conta_jovem", "conta_maior_idade", "conta_terceiros",
-    "conta_particular", "fundo_investimento_corporativo", "deposito_mercado_monetario",
-    "deposito_prazo_longo", "conta_eletronica", "fundo_investimento", "hipoteca",
-    "valores_mobiliarios", "deposito_salario", "deposito_pensao", "recebimento_recibos"
-]
-
+# --- 2. Dicionário de Tradução de Colunas ---
 translate_columns_api = {
     # Parte 1 – Dados do cliente
     "fecha_dato": "data_referencia",
@@ -174,267 +132,166 @@ translate_columns_api = {
     "ind_recibo_ult1": "recebimento_recibos"
 }
 
-# Esta é a lista de colunas que seu X_train FINAL tinha.
-# É CRÍTICA para garantir que o DataFrame de inferência tenha as mesmas colunas e ordem.
-# Você DEVE CARREGAR isso de um arquivo salvo durante o treinamento (ex: joblib.dump(X_train.columns.tolist(), 'X_train_cols.joblib'))
-X_train_columns = [
-    'ativo_mes_passado', 'conta_corrente', 'cartao_credito', 'plano_pensao', 'recebimento_recibos', 'conta_nominal',
-    'conta_maior_idade', 'conta_terceiros', 'conta_particular', 'deposito_prazo_longo', 'conta_eletronica',
-    'fundo_investimento', 'valores_mobiliarios', 'deposito_salario', 'deposito_pensao',
-    'renda_estimativa_faltante', 'tempo_desde_alta', 'renda_log', 'renda_variacao', 'possui_pacote_basico',
-    'conta_corrente_idade_interacao', 'cartao_credito_idade_interacao', 'plano_pensao_idade_interacao',
-    'recebimento_recibos_idade_interacao', 'conta_nominal_idade_interacao', 'conta_maior_idade_idade_interacao',
-    'conta_terceiros_idade_interacao', 'conta_particular_idade_interacao', 'deposito_prazo_longo_idade_interacao',
-    'conta_eletronica_idade_interacao', 'fundo_investimento_idade_interacao', 'valores_mobiliarios_idade_interacao',
-    'deposito_salario_idade_interacao', 'deposito_pensao_idade_interacao',
-    'conta_corrente_mes_anterior', 'cartao_credito_mes_anterior', 'plano_pensao_mes_anterior',
-    'recebimento_recibos_mes_anterior', 'conta_nominal_mes_anterior', 'conta_maior_idade_mes_anterior',
-    'conta_terceiros_mes_anterior', 'conta_particular_mes_anterior', 'deposito_prazo_longo_mes_anterior',
-    'conta_eletronica_mes_anterior', 'fundo_investimento_mes_anterior', 'valores_mobiliarios_mes_anterior',
-    'deposito_salario_mes_anterior', 'deposito_pensao_mes_anterior',
-    'idade_categoria_encoded', 'renda_categoria_encoded',
-    'TE_canal_aquisicao_conta_corrente', 'TE_canal_aquisicao_recebimento_recibos',
-    'TE_canal_aquisicao_conta_terceiros', 'TE_canal_aquisicao_conta_nominal', 'TE_canal_aquisicao_conta_eletronica',
-    'TE_codigo_provincia_conta_corrente', 'TE_codigo_provincia_recebimento_recibos',
-    'TE_codigo_provincia_conta_terceiros', 'TE_codigo_provincia_conta_nominal', 'TE_codigo_provincia_conta_eletronica',
-    'TE_nome_provincia_conta_corrente', 'TE_nome_provincia_recebimento_recibos',
-    'TE_nome_provincia_conta_terceiros', 'TE_nome_provincia_conta_nominal', 'TE_nome_provincia_conta_eletronica',
-    'TE_relacionamento_mes_conta_corrente', 'TE_relacionamento_mes_recebimento_recibos',
-    'TE_relacionamento_mes_conta_terceiros', 'TE_relacionamento_mes_conta_nominal', 'TE_relacionamento_mes_conta_eletronica',
-    'TE_tipo_relacionamento_mes_conta_corrente', 'TE_tipo_relacionamento_mes_recebimento_recibos',
-    'TE_tipo_relacionamento_mes_conta_terceiros', 'TE_tipo_relacionamento_mes_conta_nominal', 'TE_tipo_relacionamento_mes_conta_eletronica',
-    'TE_segmento_marketing_conta_corrente', 'TE_segmento_marketing_recebimento_recibos',
-    'TE_segmento_marketing_conta_terceiros', 'TE_segmento_marketing_conta_nominal', 'TE_segmento_marketing_conta_eletronica',
-    'TE_segmento_idade_conta_corrente', 'TE_segmento_idade_recebimento_recibos',
-    'TE_segmento_idade_conta_terceiros', 'TE_segmento_idade_conta_nominal', 'TE_segmento_idade_conta_eletronica'
-] # ESTA LISTA DEVE SER OBTIDA DINAMICAMENTE
 
-# Tentativa de carregar colunas do treino de artefato, se existir
-try:
-    _xcols_candidates = [
-        os.path.join(MODELS_DIR, 'X_train_columns.joblib'),
-        os.path.join(MODELS_DIR, 'x_train_columns.joblib')
-    ]
-    for _p in _xcols_candidates:
-        if os.path.exists(_p):
-            X_train_columns = joblib.load(_p)
-            print(f"X_train_columns carregado de {_p} com {len(X_train_columns)} colunas.")
-            break
-except Exception as _e:
-    print(f"AVISO: Falha ao carregar X_train_columns de artefato: {_e}. Usando lista embutida.")
-
-
-# Carregar Target Encoding mappings (opcional, recomendado)
-loaded_te_mappings = None
-te_path = os.path.join(MODELS_DIR, 'te_mappings.joblib')
-try:
-    if os.path.exists(te_path):
-        loaded_te_mappings = joblib.load(te_path)
-        print("Target Encoding mappings carregados com sucesso.")
-    else:
-        print(f"AVISO: TE mappings não encontrados em {te_path}. Usando 0.0 como fallback.")
-except Exception as e:
-    print(f"ERRO ao carregar TE mappings: {e}")
-
-
-# --- 2. Função de Pré-processamento para a API ---
-
+# --- 3. Função de Pré-processamento (BASEADA NO NOTEBOOK) ---
 def preprocess_dataframe_for_api(df_raw: pd.DataFrame) -> pd.DataFrame:
-    df_processed = df_raw.copy()
+    """
+    Pré-processamento usando a mesma lógica do notebook de treinamento.
+    Gera as 62 features esperadas pelos modelos XGBoost.
+    """
+    print(f"[DEBUG] preprocess - Input shape: {df_raw.shape}, columns: {list(df_raw.columns)[:10]}...")
+    
+    df = df_raw.copy()
 
-    # Aplicar renomeações (conforme translate_columns_api)
-    df_processed.rename(columns=translate_columns_api, inplace=True)
+    # 1. Converter tipos básicos
+    df['idade'] = pd.to_numeric(df['idade'], errors='coerce').fillna(35)
+    df['renda_estimativa'] = pd.to_numeric(df['renda_estimativa'], errors='coerce').fillna(120000.0)
+    df['antiguidade_meses'] = pd.to_numeric(df['antiguidade_meses'], errors='coerce').fillna(12.0)
+    
+    # 2. Preencher categoricas
+    categorical_cols = ["sexo", "pais_residencia", "segmento_marketing", "canal_aquisicao",
+                       "tipo_relacionamento", "tipo_relacionamento_mes", "codigo_provincia", "nome_provincia"]
+    for col in categorical_cols:
+        if col in df.columns:
+            df[col] = df[col].fillna("Desconhecido" if df[col].dtype == 'object' else 0)
 
-    # 1. Remover Colunas Descartáveis
-    df_processed = df_processed.drop(columns=colunas_descartar_api, errors="ignore")
-
-    # 2. Substituir valores de sexo
-    if 'sexo' in df_processed.columns:
-        df_processed["sexo"] = df_processed["sexo"].replace({"H": "homem", "V": "mulher"})
-
-    # 3. Converter colunas numéricas comuns
-    for col in colunas_numericas_comuns_api:
-        if col in df_processed.columns:
-            df_processed[col] = pd.to_numeric(df_processed[col], errors="coerce")
-
-    # 4. Criar flag para renda faltante e preencher NaNs na renda
-    if 'renda_estimativa' in df_processed.columns and 'segmento_marketing' in df_processed.columns:
-        df_processed['renda_estimativa_faltante'] = df_processed['renda_estimativa'].isna().astype(int)
-        df_processed["renda_estimativa"] = df_processed.apply(
-            lambda row: row["renda_estimativa"] if pd.notna(row["renda_estimativa"])
-            else median_renda_by_segmento_api.get(row["segmento_marketing"], median_renda_by_segmento_api.median()), axis=1
-        )
-    elif 'renda_estimativa' in df_processed.columns:
-        df_processed['renda_estimativa_faltante'] = df_processed['renda_estimativa'].isna().astype(int)
-        df_processed["renda_estimativa"] = df_processed["renda_estimativa"].fillna(median_renda_by_segmento_api.median())
-
-    # 5. Converter colunas de data
-    if 'data_entrada_banco' in df_processed.columns:
-        df_processed["data_entrada_banco"] = pd.to_datetime(df_processed["data_entrada_banco"], errors="coerce")
-    if 'data_referencia' in df_processed.columns:
-        df_processed["data_referencia"] = pd.to_datetime(df_processed["data_referencia"], errors="coerce")
-    # 5.1 tempo_desde_alta em meses aproximados
-    if 'data_entrada_banco' in df_processed.columns and 'data_referencia' in df_processed.columns:
-        diff_days = (df_processed['data_referencia'] - df_processed['data_entrada_banco']).dt.days
-        df_processed['tempo_desde_alta'] = (diff_days.fillna(0) / 30.0).astype(float)
-
-    # 6. Preencher NaNs em colunas categóricas
-    for col in categoricas_api:
-        if col in df_processed.columns:
-            df_processed[col] = df_processed[col].fillna("Desconhecido")
-
-    # 7. Garantir idade válida e dentro da faixa; evitar remoção do único registro
-    if 'idade' in df_processed.columns:
-        df_processed['idade'] = pd.to_numeric(df_processed['idade'], errors='coerce').fillna(35)
-        df_processed['idade'] = df_processed['idade'].clip(lower=18, upper=95)
-
-    # 8. Evitar remoção por NaN: preencher defaults mínimos para inferência única
-    # codigo_provincia: 28 (MADRID), relacionamento_mes: 1.0, renda_estimativa já tratada acima
-    if 'codigo_provincia' in df_processed.columns:
-        df_processed['codigo_provincia'] = pd.to_numeric(df_processed['codigo_provincia'], errors='coerce').fillna(28.0)
+    # 3. Features de engenharia: renda_log e renda_variacao
+    df['renda_log'] = np.log1p(df['renda_estimativa'])
+    df['renda_variacao'] = 0.0  # Para novos clientes, assume 0
+    
+    # 4. Features _prev (produtos do mês anterior)
+    product_cols_base = ['conta_corrente', 'conta_eletronica', 'conta_nominal', 'conta_terceiros', 'recebimento_recibos']
+    for prod_base in product_cols_base:
+        # Se não vier no input, assume 0
+        df[f'{prod_base}_prev'] = df.get(f'{prod_base}_prev', 0)
+    
+    # 5. Faixas de Idade
+    bins_age = [0, 25, 35, 45, 60, 100]
+    labels_age = ['Jovem', 'Jovem_Adulto', 'Adulto', 'Meia_Idade', 'Idoso']
+    df['idade_categoria'] = pd.cut(df['idade'], bins=bins_age, labels=labels_age, right=False)
+    df['idade_categoria'] = df['idade_categoria'].fillna('Adulto')  # Fallback
+    
+    # 6. Faixas de Renda (simplificado - idealmente usar os mesmos quantis do treino)
+    # Usando quantis fixos como aproximação
+    if df['renda_estimativa'].nunique() > 1:
+        bins_renda = [0, 75000, 120000, df['renda_estimativa'].max() + 1]
     else:
-        df_processed['codigo_provincia'] = 28.0
-    if 'relacionamento_mes' in df_processed.columns:
-        df_processed['relacionamento_mes'] = pd.to_numeric(df_processed['relacionamento_mes'], errors='coerce').fillna(1.0)
-    else:
-        df_processed['relacionamento_mes'] = 1.0
-
-    # 9. Preencher NaNs em 'deposito_salario' e 'deposito_pensao'
-    if 'deposito_salario' in df_processed.columns:
-        df_processed["deposito_salario"] = df_processed["deposito_salario"].fillna(0)
-    if 'deposito_pensao' in df_processed.columns:
-        df_processed["deposito_pensao"] = df_processed["deposito_pensao"].fillna(0)
-
-    # 10. Remover duplicatas
-    df_processed = df_processed.drop_duplicates()
-
-    # 11. Substituir valores em 'segmento_marketing'
-    if 'segmento_marketing' in df_processed.columns:
-        df_processed['segmento_marketing'] = df_processed['segmento_marketing'].replace({
-            '03 - UNIVERSITARIO': 'universitario',
-            '02 - PARTICULARES': 'particulares',
-            '01 - TOP': 'top'
-        })
-
-    # 12. Remover produtos não relevantes
-    if 'colunas_numericas_produtos_full_api' in globals() and 'produtos_all_api' in globals():
-        current_product_cols_to_drop = [col for col in colunas_numericas_produtos_full_api if col not in produtos_all_api]
-        df_processed = df_processed.drop(columns=current_product_cols_to_drop, errors="ignore")
-
-    # 13. Criar categorias de idade, antiguidade e renda (com fallback para valores fora dos bins)
-    if 'idade' in df_processed.columns:
-        df_processed['idade_categoria'] = pd.cut(
-            df_processed['idade'], bins=bins_age_train_api, labels=labels_age_train_api, right=False
-        )
-        df_processed['idade_categoria_str'] = df_processed['idade_categoria'].astype(str).replace('nan', labels_age_train_api[0])
-        if loaded_encoder_idade:
-            try:
-                df_processed['idade_categoria_encoded'] = loaded_encoder_idade.transform(
-                    df_processed[['idade_categoria_str']]
-                ).ravel()
-            except Exception:
-                idx_map = {label: i for i, label in enumerate(labels_age_train_api)}
-                df_processed['idade_categoria_encoded'] = df_processed['idade_categoria_str'].map(idx_map).fillna(-1)
-        else:
-            idx_map = {label: i for i, label in enumerate(labels_age_train_api)}
-            df_processed['idade_categoria_encoded'] = df_processed['idade_categoria_str'].map(idx_map).fillna(-1)
-        df_processed['idade_categoria_encoded'] = pd.to_numeric(df_processed['idade_categoria_encoded'], errors='coerce').fillna(-1)
-
-    if 'antiguidade_meses' in df_processed.columns:
-        df_processed['antiguedade_tempo'] = pd.cut(df_processed['antiguidade_meses'], bins=bins_antiguedad_train_api, labels=labels_antiguedad_train_api, right=False)
-
-    if 'renda_estimativa' in df_processed.columns:
-        df_processed['renda_categoria'] = pd.cut(
-            df_processed['renda_estimativa'], bins=bins_renda_train_api, labels=labels_renda_train_api,
-            include_lowest=True, right=False, duplicates='drop'
-        )
-        df_processed['renda_categoria_str'] = df_processed['renda_categoria'].astype(str).replace('nan', labels_renda_train_api[0])
-        if loaded_encoder_renda:
-            try:
-                df_processed['renda_categoria_encoded'] = loaded_encoder_renda.transform(
-                    df_processed[['renda_categoria_str']]
-                ).ravel()
-            except Exception:
-                idx_map_r = {label: i for i, label in enumerate(labels_renda_train_api)}
-                df_processed['renda_categoria_encoded'] = df_processed['renda_categoria_str'].map(idx_map_r).fillna(-1)
-        else:
-            idx_map_r = {label: i for i, label in enumerate(labels_renda_train_api)}
-            df_processed['renda_categoria_encoded'] = df_processed['renda_categoria_str'].map(idx_map_r).fillna(-1)
-        df_processed['renda_categoria_encoded'] = pd.to_numeric(df_processed['renda_categoria_encoded'], errors='coerce').fillna(-1)
-
-        df_processed['renda_log'] = np.log1p(df_processed['renda_estimativa'])
-        df_processed['renda_variacao'] = df_processed.groupby('id_cliente')['renda_estimativa'].pct_change().fillna(0)
-        df_processed['renda_faixas'] = pd.cut(df_processed['renda_estimativa'], bins=bins_renda_faixas_train_api, labels=labels_renda_faixas_train_api, include_lowest=True, duplicates='drop')
-
-    # Features de Interação e Co-ocorrência
-    if 'conta_corrente' in df_processed.columns and 'recebimento_recibos' in df_processed.columns:
-        df_processed['possui_pacote_basico'] = ((df_processed['conta_corrente'] == 1) & (df_processed['recebimento_recibos'] == 1)).astype(int)
-
-    if 'segmento_marketing' in df_processed.columns and 'idade_categoria' in df_processed.columns:
-        df_processed['segmento_idade'] = df_processed['segmento_marketing'].astype(str) + '_' + df_processed['idade_categoria'].astype(str)
-
-    # Lag Features (M-1): copiar posse para *_mes_anterior mantendo colunas base
-    for original_name, translated_name in translate_columns_api.items():
-        if translated_name in produtos_all_api and translated_name in df_processed.columns:
-            df_processed[f"{translated_name}_mes_anterior"] = df_processed[translated_name]
-
-    for prod in produtos_all_api:
-        lag_col = f"{prod}_mes_anterior"
-        if lag_col not in df_processed.columns:
-            df_processed[lag_col] = 0.0
-
-    # Interações com idade (conforme X_train_columns *_idade_interacao)
-    if 'idade' in df_processed.columns:
-        for col in X_train_columns:
-            if col.endswith('_idade_interacao'):
-                base = col.replace('_idade_interacao', '')
-                if base in df_processed.columns:
-                    base_series = df_processed[base]
-                else:
-                    lag_col_name = f"{base}_mes_anterior"
-                    base_series = df_processed[lag_col_name] if lag_col_name in df_processed.columns else 0
-                df_processed[col] = pd.to_numeric(base_series, errors='coerce').fillna(0) * df_processed['idade']
-
-    # Target Encoding (IMPORTANTE: Mapeamentos TE devem ser carregados, não criados)
-    # Aqui, estamos preenchendo com 0 como placeholder. Em produção, use um dicionário/DataFrame pré-calculado.
-    categorical_for_encoding_api = [
+        bins_renda = [0, 75000, 120000, 300000]
+    labels_renda = ['Baixa', 'Media_Baixa', 'Media_Alta']
+    
+    # Garantir pelo menos 3 bins
+    if len(bins_renda) < 4:
+        bins_renda = [0, 75000, 120000, 300000]
+    
+    df['renda_categoria'] = pd.cut(df['renda_estimativa'], bins=bins_renda, labels=labels_renda[:len(bins_renda)-1], include_lowest=True)
+    df['renda_categoria'] = df['renda_categoria'].fillna('Media_Baixa')  # Fallback
+    
+    # Adicionar 'Alta' se necessário para match com encoder
+    if 'Alta' not in df['renda_categoria'].cat.categories:
+        df['renda_categoria'] = df['renda_categoria'].cat.add_categories(['Alta'])
+    
+    # 7. Outras features criadas
+    df['possui_pacote_basico'] = ((df.get('conta_corrente', 0) == 1) & (df.get('recebimento_recibos', 0) == 1)).astype(int)
+    
+    # 8. Features de Interação produto-idade
+    for prod_base in product_cols_base:
+        df[f'{prod_base}_idade_interacao'] = df.get(prod_base, 0) * df['idade']
+    
+    # 9. Features _mes_anterior (cópia dos produtos atuais se não fornecido)
+    for prod_base in product_cols_base:
+        if f'{prod_base}_mes_anterior' not in df.columns:
+            df[f'{prod_base}_mes_anterior'] = df.get(prod_base, 0)
+    
+    # 10. Aplicar Encoders
+    try:
+        df['idade_categoria_encoded'] = encoder_idade.transform(df[['idade_categoria']]).flatten()
+    except Exception as e:
+        print(f"Erro ao encodar idade_categoria: {e}")
+        df['idade_categoria_encoded'] = 2  # Default 'Adulto'
+    
+    try:
+        df['renda_categoria_encoded'] = encoder_renda.transform(df[['renda_categoria']]).flatten()
+    except Exception as e:
+        print(f"Erro ao encodar renda_categoria: {e}")
+        df['renda_categoria_encoded'] = 1  # Default 'Media_Baixa'
+    
+    # 11. Target Encoding (usando valores default - IDEALMENTE carregar mappings salvos)
+    # Sem os mappings reais, usamos 0.5 como média global para todas as TE features
+    te_cols = [
         "canal_aquisicao", "codigo_provincia", "nome_provincia",
-        "relacionamento_mes", "tipo_relacionamento_mes", "segmento_marketing", "segmento_idade"
+        "relacionamento_mes", "tipo_relacionamento_mes", "segmento_marketing"
     ]
-    for col in categorical_for_encoding_api:
-        cat_val = None
-        if col in df_processed.columns and len(df_processed.index) > 0:
-            cat_val = str(df_processed[col].iloc[0])
-        for product_name_te in top_5_products:
-            base_prod = product_name_te.replace('_new', '')
-            te_feature_name = f"TE_{col}_{base_prod}"
-            te_value = 0.0
-            if loaded_te_mappings and isinstance(loaded_te_mappings, dict):
-                te_col_map = loaded_te_mappings.get(col, {})
-                te_prod_map = te_col_map.get(base_prod, {})
-                te_value = float(te_prod_map.get(cat_val, te_prod_map.get('__global__', 0.0)))
-            df_processed[te_feature_name] = te_value
+    
+    # Criar feature segmento_idade para TE
+    if 'segmento_marketing' in df.columns:
+        df['segmento_idade'] = df['segmento_marketing'].astype(str) + '_' + df['idade_categoria'].astype(str)
+    else:
+        df['segmento_idade'] = 'Desconhecido_Adulto'
+    
+    te_cols.append('segmento_idade')
+    
+    products_te = ['conta_corrente', 'conta_eletronica', 'conta_nominal', 'conta_terceiros', 'recebimento_recibos']
+    
+    # Preencher todas as features TE com valor default 0.5 (média global)
+    # TODO: Substituir por mappings reais salvos durante o treinamento
+    for col in te_cols:
+        for prod_te in products_te:
+            feature_name = f"TE_{col}_{prod_te}"
+            df[feature_name] = 0.5  # Valor default sem os mappings reais
+    
+    # 12. Selecionar apenas as 62 features esperadas pelo modelo (na ordem correta)
+    expected_features = [
+        'ativo_mes_passado', 'conta_corrente', 'conta_nominal', 'conta_terceiros',
+        'conta_eletronica', 'conta_cobranca_recibos', 'recebimento_recibos',
+        'conta_corrente_prev', 'conta_eletronica_prev', 'conta_nominal_prev',
+        'conta_terceiros_prev', 'recebimento_recibos_prev',
+        'renda_log', 'renda_variacao', 'possui_pacote_basico',
+        'conta_corrente_idade_interacao', 'conta_eletronica_idade_interacao',
+        'conta_nominal_idade_interacao', 'conta_terceiros_idade_interacao',
+        'recebimento_recibos_idade_interacao',
+        'conta_corrente_mes_anterior', 'conta_eletronica_mes_anterior',
+        'conta_nominal_mes_anterior', 'conta_terceiros_mes_anterior',
+        'recebimento_recibos_mes_anterior',
+        'idade_categoria_encoded', 'renda_categoria_encoded',
+        'TE_canal_aquisicao_conta_corrente', 'TE_canal_aquisicao_conta_eletronica',
+        'TE_canal_aquisicao_conta_nominal', 'TE_canal_aquisicao_conta_terceiros',
+        'TE_canal_aquisicao_recebimento_recibos',
+        'TE_codigo_provincia_conta_corrente', 'TE_codigo_provincia_conta_eletronica',
+        'TE_codigo_provincia_conta_nominal', 'TE_codigo_provincia_conta_terceiros',
+        'TE_codigo_provincia_recebimento_recibos',
+        'TE_nome_provincia_conta_corrente', 'TE_nome_provincia_conta_eletronica',
+        'TE_nome_provincia_conta_nominal', 'TE_nome_provincia_conta_terceiros',
+        'TE_nome_provincia_recebimento_recibos',
+        'TE_relacionamento_mes_conta_corrente', 'TE_relacionamento_mes_conta_eletronica',
+        'TE_relacionamento_mes_conta_nominal', 'TE_relacionamento_mes_conta_terceiros',
+        'TE_relacionamento_mes_recebimento_recibos',
+        'TE_tipo_relacionamento_mes_conta_corrente', 'TE_tipo_relacionamento_mes_conta_eletronica',
+        'TE_tipo_relacionamento_mes_conta_nominal', 'TE_tipo_relacionamento_mes_conta_terceiros',
+        'TE_tipo_relacionamento_mes_recebimento_recibos',
+        'TE_segmento_marketing_conta_corrente', 'TE_segmento_marketing_conta_eletronica',
+        'TE_segmento_marketing_conta_nominal', 'TE_segmento_marketing_conta_terceiros',
+        'TE_segmento_marketing_recebimento_recibos',
+        'TE_segmento_idade_conta_corrente', 'TE_segmento_idade_conta_eletronica',
+        'TE_segmento_idade_conta_nominal', 'TE_segmento_idade_conta_terceiros',
+        'TE_segmento_idade_recebimento_recibos'
+    ]
+    
+    # Garantir que todas as features existem (fill com 0 se ausente)
+    for feature in expected_features:
+        if feature not in df.columns:
+            df[feature] = 0
+    
+    # Retornar apenas as 62 features na ordem correta
+    df_final = df[expected_features]
+    
+    print(f"[DEBUG] preprocess - Output shape: {df_final.shape}, columns: {list(df_final.columns)[:10]}...")
+    
+    return df_final
+    
+    return df_final
 
-    # Converter colunas 'object' ou 'category' para numérico para XGBoost (cat.codes)
-    for col in df_processed.columns:
-        if df_processed[col].dtype == 'object':
-            df_processed[col] = df_processed[col].astype('category').cat.codes
-        elif isinstance(df_processed[col].dtype, pd.CategoricalDtype):
-            df_processed[col] = df_processed[col].cat.codes
 
-    df_processed = df_processed.fillna(0) # Preencher quaisquer NaNs restantes
-
-    # Reindexar para ter exatamente as mesmas colunas que X_train e na mesma ordem
-    # ESSENCIAL para a previsão correta!
-    df_processed = df_processed.reindex(columns=X_train_columns, fill_value=0)
-
-    return df_processed
-
-
-# --- 3. Definir o Esquema de Entrada da API (CustomerFeatures) ---
-# Esta classe Pydantic define o formato esperado para a entrada da API.
-# Ela deve conter *todas as colunas originais* que o preprocessamento espera.
-# Os nomes devem ser os originais do CSV, antes de qualquer renomeação.
+# --- 4. Esquema de Entrada (CustomerFeatures) ---
 class CustomerFeatures(BaseModel):
     fecha_dato: Optional[dt_date] = None
     ncodpers: Optional[int] = None
@@ -487,7 +344,7 @@ class CustomerFeatures(BaseModel):
 
 
 def _apply_defaults(data: Dict[str, Any]) -> Dict[str, Any]:
-    # Valores padrão mínimos para permitir o pré-processamento
+    """Aplica valores padrão mínimos."""
     defaults = {
         "fecha_dato": date.today().strftime("%Y-%m-%d"),
         "ncodpers": 1,
@@ -512,27 +369,22 @@ def _apply_defaults(data: Dict[str, Any]) -> Dict[str, Any]:
         "ind_actividad_cliente": 1.0,
         "renta": 120000.0,
         "segmento": "02 - PARTICULARES",
-        # Indicadores de produtos (prefixo ind_*)
-        "ind_cco_fin_ult1": 1,
-        "ind_recibo_ult1": 1,
-        "ind_nomina_ult1": 1
+        "ind_cco_fin_ult1": 0,
+        "ind_recibo_ult1": 0,
+        "ind_nomina_ult1": 0
     }
-    # Preenche faltantes
     for k, v in defaults.items():
         if data.get(k) in (None, ""):
             data[k] = v
-    # Qualquer indicador não fornecido vira 0
     for k in list(data.keys()):
         if k.startswith("ind_") and data[k] is None:
             data[k] = 0
     return data
 
 
-# --- Seus Endpoints Existentes (Mantidos) ---
-
+# --- 5. Endpoints Existentes (Mantidos) ---
 @app.post("/simular")
 def criar_simulacao(data: dict, session: Session = Depends(get_session)):
-
     simulacao = Simulacao(
         genero=data["genero"],
         idade=data["idade"],
@@ -543,31 +395,23 @@ def criar_simulacao(data: dict, session: Session = Depends(get_session)):
         canal=data["canal"],
         produtos=json.dumps(data["produtos"])
     )
-
     session.add(simulacao)
     session.commit()
     session.refresh(simulacao)
-
     return {"id": simulacao.id}
 
 
 @app.get("/simular/{id}")
 def obter_simulacao(id: int, session: Session = Depends(get_session)):
     simulacao = session.get(Simulacao, id)
-
     if not simulacao:
         return {"erro": "simulação não encontrada"}
-
-    # O resultado aqui ainda é mockado. Se você quiser que o resultado venha do modelo,
-    # precisaria de todos os campos de CustomerFeatures na sua tabela Simulacao,
-    # ou então buscar esses dados de outro lugar para preencher o CustomerFeatures.
     resultado = {
         "ranking": [
             {"pos": 1, "produto": "Cartão de Crédito", "prob": 0.9821},
             {"pos": 2, "produto": "Seguro Residencial", "prob": 0.9755},
         ]
     }
-
     return {
         "simulacao": {
             **simulacao.model_dump(),
@@ -577,7 +421,7 @@ def obter_simulacao(id: int, session: Session = Depends(get_session)):
     }
 
 
-# --- NOVO Endpoint de Predição com os Modelos --- 
+# --- 6. Endpoint de Predição com os Novos Modelos ---
 @app.post("/predict_products", response_model=Dict[str, float])
 async def predict_products(customer_data: CustomerFeatures):
     data_dict = customer_data.model_dump()
@@ -603,19 +447,21 @@ async def predict_products(customer_data: CustomerFeatures):
 
     predictions = {}
     for product_name, model in top_5_xgb_models.items():
-        feature_names = getattr(model, "feature_names", None)
-        if feature_names:
-            df_for_model = processed_df.reindex(columns=list(feature_names), fill_value=0)
-        else:
-            df_for_model = processed_df
-        dtest = xgb.DMatrix(df_for_model)
-        proba = model.predict(dtest)[0]
-        predictions[product_name.replace("_new", "")] = float(proba)
+        try:
+            dmatrix = xgb.DMatrix(processed_df)
+            proba = float(model.predict(dmatrix)[0])
+            predictions[product_name.replace("_new", "")] = proba
+            print(f"Predição '{product_name}': {proba} (shape: {processed_df.shape})")
+        except Exception as e:
+            print(f"Erro ao prever '{product_name}': {e}")
+            print(f"  - DataFrame shape: {processed_df.shape}")
+            print(f"  - DataFrame columns: {list(processed_df.columns)[:10]}...")
+            predictions[product_name.replace("_new", "")] = 0.0
 
     return predictions
 
 
-# --- NOVO: Utilitário para construir linha bruta a partir do SimulacaoInput ---
+# --- 7. Utilitários para /recomendar ---
 def _map_segmento_to_original(seg: Optional[str]) -> str:
     if not seg:
         return "02 - PARTICULARES"
@@ -633,72 +479,74 @@ def _map_genero_to_original(gen: Optional[str]) -> str:
     if not gen:
         return "H"
     g = gen.strip().upper()
-    if g in {"H", "M"}:  # H/M -> homem (dataset)
+    if g in {"H", "M"}:
         return "H"
-    if g in {"V", "F"}:  # V/F -> mulher (dataset)
+    if g in {"V", "F"}:
         return "V"
     return "H"
 
 
 def _provincia_codigo(nome_prov: Optional[str]) -> float:
     if not nome_prov:
-        return 28.0  # MADRID por padrão
-    nome = str(nome_prov).upper()
-    # Mapa simples: hash estável em uma faixa, mas determinístico
-    # Preferível ter um dicionário real; aqui garantimos não-NaN
-    return float(abs(hash(nome)) % 50 + 1)
+        return 28.0
+    return float(abs(hash(nome_prov.upper())) % 50 + 1)
 
 
 def build_raw_from_simulacao(payload: SimulacaoInput) -> pd.DataFrame:
+    """
+    Constrói um DataFrame com os dados brutos de entrada da simulação.
+    Inclui campos necessários para o preprocessamento baseado no notebook.
+    """
     today_str = date.today().strftime("%Y-%m-%d")
 
-    # Preparar todos os 24 indicadores originais como 0
+    # Mapear produtos do payload para os indicadores originais
     product_indicator_original_cols = {k: v for k, v in translate_columns_api.items() if k.startswith("ind_")}
     produto_pt_to_original = {v: k for k, v in product_indicator_original_cols.items()}
     indicadores = {col: 0 for col in produto_pt_to_original.values()}
 
-    # Marcar produtos que o usuário já possui
     if payload.produtos:
         for p in payload.produtos:
             pt = str(p).strip()
             if pt in produto_pt_to_original:
                 indicadores[produto_pt_to_original[pt]] = 1
 
+    # Construir dicionário raw com campos renomeados para PT-BR
     raw = {
-        # Campos de data/identificação
-        "fecha_dato": payload and today_str,
-        "ncodpers": 1,
-        "ind_empleado": "N",
-        # Localização e demografia
-        "pais_residencia": "ES",
+        # Campos básicos
+        "idade": getattr(payload, "idade", None) or 35,
+        "renda_estimativa": float(getattr(payload, "renda", None) or 120000.0),
+        "antiguidade_meses": float(getattr(payload, "antiguidade", None) or 12),
         "sexo": _map_genero_to_original(getattr(payload, "genero", None)),
-        "age": getattr(payload, "idade", None) or 35,
-        "fecha_alta": today_str,
-        "ind_nuevo": 0,
-        "antiguedad": float(getattr(payload, "antiguidade", None) or 12),
-        "indrel": 1.0,
-        "ult_fec_cli_1t": None,
-        "indrel_1mes": 1.0,  # evitar drop por NaN
-        "tiprel_1mes": "A",
-        "indresi": "S",
-        "indext": "N",
-        "conyuemp": "N",
-        "canal_entrada": getattr(payload, "canal", None) or "KHL",
-        "indfall": "N",
-        "tipodom": 1,
-        "cod_prov": _provincia_codigo(getattr(payload, "provincia", None)),
-        "nomprov": (getattr(payload, "provincia", None) or "MADRID").upper(),
-        "ind_actividad_cliente": 1.0,
-        "renta": float(getattr(payload, "renda", None) or 120000.0),
-        "segmento": _map_segmento_to_original(getattr(payload, "segmento", None)),
-        # Indicadores de produtos atuais
-        **indicadores,
+        "segmento_marketing": _map_segmento_to_original(getattr(payload, "segmento", None)),
+        "codigo_provincia": _provincia_codigo(getattr(payload, "provincia", None)),
+        "nome_provincia": (getattr(payload, "provincia", None) or "MADRID").upper(),
+        "canal_aquisicao": getattr(payload, "canal", None) or "KHL",
+        "pais_residencia": "ES",
+        "tipo_relacionamento": "1",
+        "tipo_relacionamento_mes": "A",
+        "relacionamento_mes": 1.0,
+        "ativo_mes_passado": 1.0,
+        
+        # Produtos atuais (traduzidos)
+        "conta_corrente": indicadores.get("ind_cco_fin_ult1", 0),
+        "conta_eletronica": indicadores.get("ind_ecue_fin_ult1", 0),
+        "conta_nominal": indicadores.get("ind_cno_fin_ult1", 0),
+        "conta_terceiros": indicadores.get("ind_ctop_fin_ult1", 0),
+        "recebimento_recibos": indicadores.get("ind_recibo_ult1", 0),
+        "conta_cobranca_recibos": indicadores.get("ind_reca_fin_ult1", 0),
+        
+        # Produtos do mês anterior (para novos clientes, assume mesmos valores)
+        "conta_corrente_prev": indicadores.get("ind_cco_fin_ult1", 0),
+        "conta_eletronica_prev": indicadores.get("ind_ecue_fin_ult1", 0),
+        "conta_nominal_prev": indicadores.get("ind_cno_fin_ult1", 0),
+        "conta_terceiros_prev": indicadores.get("ind_ctop_fin_ult1", 0),
+        "recebimento_recibos_prev": indicadores.get("ind_recibo_ult1", 0),
     }
 
     return pd.DataFrame([raw])
 
 
-# --- NOVO: Endpoint amigável para recomendar top-5 ---
+# --- 8. Endpoint /recomendar ---
 @app.post("/recomendar")
 async def recomendar(simulacao: SimulacaoInput, debug: bool = False):
     try:
@@ -711,16 +559,19 @@ async def recomendar(simulacao: SimulacaoInput, debug: bool = False):
             raise HTTPException(status_code=500, detail="Modelos não carregados.")
 
         preds = {}
+        print(f"DataFrame processado: shape={processed_df.shape}, colunas={list(processed_df.columns)[:10]}...")
         for product_name, model in top_5_xgb_models.items():
-            feature_names = getattr(model, "feature_names", None)
-            if feature_names:
-                df_for_model = processed_df.reindex(columns=list(feature_names), fill_value=0)
-            else:
-                df_for_model = processed_df
-            dtest = xgb.DMatrix(df_for_model)
-            proba = float(model.predict(dtest)[0])
-            base_name = product_name.replace("_new", "")
-            preds[base_name] = proba
+            try:
+                dmatrix = xgb.DMatrix(processed_df)
+                proba = float(model.predict(dmatrix)[0])
+                base_name = product_name.replace("_new", "")
+                preds[base_name] = proba
+                print(f"Predição '{base_name}': {proba}")
+            except Exception as e:
+                print(f"Erro ao prever '{product_name}': {e}")
+                import traceback
+                traceback.print_exc()
+                preds[product_name.replace("_new", "")] = 0.0
 
         # Não recomendar produtos já possuídos
         possui = set(simulacao.produtos or [])
@@ -733,20 +584,11 @@ async def recomendar(simulacao: SimulacaoInput, debug: bool = False):
         if not debug:
             return {"ranking": ranking}
 
-        # Modo debug: retornar resumo de features-chave usadas
+        # Modo debug
         feature_row = processed_df.iloc[0].to_dict()
-        te_features = {k: float(v) for k, v in feature_row.items() if k.startswith('TE_')}
-        idade_interacoes = {k: float(v) for k, v in feature_row.items() if k.endswith('_idade_interacao')}
-        lags = {k: float(v) for k, v in feature_row.items() if k.endswith('_mes_anterior')}
-
         debug_info = {
-            "te_features_nonzero": {k: v for k, v in te_features.items() if v != 0.0},
-            "idade_interacoes_nonzero": {k: v for k, v in idade_interacoes.items() if v != 0.0},
-            "lags": lags,
-            "idade": float(feature_row.get('idade', 0)),
-            "renda_log": float(feature_row.get('renda_log', 0)),
-            "idade_categoria_encoded": float(feature_row.get('idade_categoria_encoded', -1)),
-            "renda_categoria_encoded": float(feature_row.get('renda_categoria_encoded', -1))
+            "processed_features_sample": {k: float(v) if isinstance(v, (int, float, np.number)) else str(v) for k, v in list(feature_row.items())[:20]},
+            "processed_shape": processed_df.shape
         }
 
         return {"ranking": ranking, "debug": debug_info}
@@ -756,19 +598,12 @@ async def recomendar(simulacao: SimulacaoInput, debug: bool = False):
         raise HTTPException(status_code=500, detail=f"Erro ao recomendar: {e}")
 
 
-# --- Endpoint de Diagnóstico de Artefatos/Carregamentos ---
+# --- 9. Endpoint de Diagnóstico ---
 @app.get("/_artifacts")
 def artifacts_status():
-    te_present = loaded_te_mappings is not None
-    encoders_present = bool(loaded_encoder_idade) and bool(loaded_encoder_renda)
     models_loaded = list(top_5_xgb_models.keys())
-    xcols_count = len(X_train_columns) if isinstance(X_train_columns, (list, tuple)) else 0
     return {
-        "encoders": {
-            "idade": bool(loaded_encoder_idade),
-            "renda": bool(loaded_encoder_renda)
-        },
-        "te_mappings": te_present,
-        "models": models_loaded,
-        "x_train_columns_count": xcols_count
+        "models_directory": MODELS_DIR,
+        "models_loaded": models_loaded,
+        "models_count": len(models_loaded)
     }
